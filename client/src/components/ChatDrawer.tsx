@@ -21,6 +21,75 @@ const quickQuestions = [
   "How to apply for admissions?",
 ];
 
+function FormattedMessage({ text }: { text: string }) {
+  // Normalize markdown structure if lines were squished
+  let normalized = text.replace(/([^\n])\s+(\*\*[^*]+?\*\*)/g, "$1\n\n$2");
+  normalized = normalized.replace(/([^\n])\s+(?<!\*)\*(?!\*)\s+/g, "$1\n* ");
+
+  const lines = normalized.split("\n");
+  const elements: React.ReactNode[] = [];
+  let currentList: string[] = [];
+
+  const renderInline = (str: string) => {
+    const parts = str.split(/(\*\*.*?\*\*)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
+        return (
+          <strong key={i} className="font-bold text-gray-900">
+            {part.slice(2, -2)}
+          </strong>
+        );
+      }
+      return part;
+    });
+  };
+
+  const flushList = () => {
+    if (currentList.length > 0) {
+      elements.push(
+        <ul key={`ul-${elements.length}`} className="list-disc pl-5 space-y-1 my-1.5 text-gray-700">
+          {currentList.map((item, idx) => (
+            <li key={idx} className="leading-relaxed">
+              {renderInline(item)}
+            </li>
+          ))}
+        </ul>
+      );
+      currentList = [];
+    }
+  };
+
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushList();
+      return;
+    }
+
+    if (trimmed.startsWith("* ") || trimmed.startsWith("- ")) {
+      currentList.push(trimmed.slice(2).trim());
+    } else if (trimmed.startsWith("**") && trimmed.endsWith("**") && trimmed.length > 4) {
+      flushList();
+      elements.push(
+        <h4 key={`h-${index}`} className="font-bold text-gray-900 mt-2.5 mb-1 text-sm">
+          {trimmed.slice(2, -2)}
+        </h4>
+      );
+    } else {
+      flushList();
+      elements.push(
+        <p key={`p-${index}`} className="my-1 leading-relaxed text-gray-800">
+          {renderInline(trimmed)}
+        </p>
+      );
+    }
+  });
+
+  flushList();
+
+  return <div className="space-y-1">{elements}</div>;
+}
+
 export default function ChatDrawer({ open, onClose }: ChatDrawerProps) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([
@@ -101,12 +170,16 @@ export default function ChatDrawer({ open, onClose }: ChatDrawerProps) {
                 <Bot className="w-3 h-3 text-white" />
               </div>
             )}
-            <div className={`max-w-[80%] px-3 py-2 rounded-2xl text-sm leading-relaxed ${
+            <div className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${
               msg.sender === "user"
-                ? "bg-maroon text-white rounded-br-sm"
+                ? "bg-maroon text-white rounded-br-sm whitespace-pre-wrap"
                 : "bg-white text-gray-800 border border-gray-200 rounded-bl-sm shadow-sm"
             }`}>
-              {msg.text}
+              {msg.sender === "bot" ? (
+                <FormattedMessage text={msg.text} />
+              ) : (
+                msg.text
+              )}
             </div>
             {msg.sender === "user" && (
               <div className="w-6 h-6 bg-gray-300 rounded-full flex items-center justify-center flex-shrink-0">

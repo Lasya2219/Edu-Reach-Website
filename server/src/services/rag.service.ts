@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MongoClient } from "mongodb";
-import { createAgent, tool } from "langchain";
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import {
   ChatGoogleGenerativeAI,
   GoogleGenerativeAIEmbeddings,
@@ -9,7 +9,6 @@ import {
 import { MongoDBAtlasVectorSearch } from "@langchain/mongodb";
 import { TextLoader } from "@langchain/classic/document_loaders/fs/text";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
-import { z } from "zod";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,7 +43,7 @@ const getVectorStore = async () => {
 
   return new MongoDBAtlasVectorSearch(getEmbeddings(), {
     collection: collection as any,
-    indexName: "edureach_vector_index",
+    indexName: "edureachvectorindex",
     textKey: "text",
     embeddingKey: "embedding",
   });
@@ -110,7 +109,7 @@ export const initializeKnowledgeBase = async (): Promise<void> => {
   // EMBED + STORE
   const vectorStore = new MongoDBAtlasVectorSearch(embeddings, {
     collection: collection as any,
-    indexName: "edureach_vector_index",
+    indexName: "edureachvectorindex",
     textKey: "text",
     embeddingKey: "embedding",
   });
@@ -131,60 +130,61 @@ export const initializeKnowledgeBase = async (): Promise<void> => {
   }
 };
 
-const createRetrieveTool = (vectorStore: MongoDBAtlasVectorSearch) => {
-  return tool(
-    async ({ query }: { query: string }) => {
-      const retrievedDocs = await vectorStore.similaritySearch(query, 3);
-      return retrievedDocs
-        .map((doc) => `Source: ${doc.metadata.source}\nContent: ${doc.pageContent}`)
-        .join("\n\n");
-    },
-    {
-      name: "retrieve",
-      description:
-        "Retrieve information from the EduReach College knowledge base. " +
-        "Use this for any questions about courses, fees, admissions, mentors, campus, placements.",
-      schema: z.object({ query: z.string() }),
-    }
-  );
-};
-
 // --- Get RAG Response ---
 export const getRAGResponse = async (question: string): Promise<string> => {
   try {
     const vectorStore = await getVectorStore();
-    const retrieve = createRetrieveTool(vectorStore);
+    let retrievedDocs;
+    try {
+      retrievedDocs = await vectorStore.similaritySearch(question, 4);
+      console.log(` RAG retrieved ${retrievedDocs.length} chunks for: "${question}"`);
+    } catch (error) {
+      console.error(" RAG retrieval failed. Check MongoDB Atlas connection and vector index config.");
+      console.error("   Expected database: edureach_db");
+      console.error("   Expected collection: knowledge_docs");
+      console.error("   Expected vector index: edureachvectorindex");
+      throw error;
+    }
+
+    if (retrievedDocs.length === 0) {
+      return "I don't have that information right now. Click Talk to Us to speak with a counselor.";
+    }
 
     const model = new ChatGoogleGenerativeAI({
-      model: "gemini-2.5-flash",
-      temperature: 0.7,
+      apiKey: process.env.GOOGLE_API_KEY || "",
+      model: "gemini-3.5-flash-lite",
+      temperature: 0.3,
     });
 
-    const agent = createAgent({
-      model,
-      tools: [retrieve],
-      systemPrompt:
-        "You are EduReach Bot, a helpful AI counselor for EduReach College, Hyderabad. " +
-        "ALWAYS use the retrieve tool to search the knowledge base before answering. " +
-        "Be concise, friendly, and professional. " +
-        "If the information is not found, say: " +
-        "'I don't have that information right now. Click Talk to Us to speak with a counselor.'",
-    });
+    const context = retrievedDocs
+      .map((doc, index) => `Source ${index + 1}: ${doc.pageContent}`)
+      .join("\n\n");
 
-    const result = await agent.invoke({
-      messages: [{ role: "user", content: question }],
-    });
+    let result;
+    try {
+      result = await model.invoke([
+        new SystemMessage(
+          "You are EduReach Bot, a helpful AI counselor for EduReach College, Hyderabad. " +
+            "Answer only from the provided knowledge base context. " +
+            "Be concise, friendly, and professional. " +
+            "Always format responses cleanly: use bold category headings (e.g. **B.Tech Programs (4 years):**), bullet points for lists on new lines, and line breaks between sections. " +
+            "If the context does not contain the answer, say exactly: " +
+            "\"I don't have that information right now. Click Talk to Us to speak with a counselor.\""
+        ),
+        new HumanMessage(`Knowledge base context:\n${context}\n\nUser question: ${question}`),
+      ]);
+    } catch (error) {
+      console.error(" RAG generation failed. Check GOOGLE_API_KEY and Gemini model access.");
+      throw error;
+    }
 
-    const messages = result.messages;
-    const lastMessage = messages[messages.length - 1];
-
-    if (!lastMessage) {
+    if (!result.content) {
       return "I couldn't generate a response. Please try again.";
     }
 
-    return typeof lastMessage.content === "string"
-      ? lastMessage.content
-      : JSON.stringify(lastMessage.content);
+    return typeof result.content === "string"
+      ? result.content
+      : JSON.stringify(result.content);
   } catch (error) {
     console.error(" RAG Agent Error:", error);
     return "I'm having trouble right now. Please try again or click 'Talk to Us'.";
