@@ -9,6 +9,9 @@
     "start": "node --experimental-transform-types src/server.ts",
     "build": "tsc"
   },
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "author": "",
   "license": "MIT",
   "description": "EduReach College Intelligence Platform — Backend (Node.js 24)",
